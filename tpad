@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+
+if [ -t 1 ]; then
+    RED=$'\033[1;31m'
+    WHITE=$'\033[1;37m'
+    GRAY=$'\033[0;90m'
+    RESET=$'\033[0m'
+else
+    RED=""; WHITE=""; GRAY=""; RESET=""
+fi
+
+section() {
+    printf '\n%s%s%s\n' "$RED" "$1" "$RESET"
+    printf '%s%s%s\n' "$GRAY" '  --------------------------------------' "$RESET"
+}
+row() { printf '  %-20s %s%s%s\n' "$1" "$WHITE" "$2" "$RESET"; }
+
+printf '\n%s' "$RED"
+printf '  ======================================\n'
+printf '           THINKPAD SYSTEM STATUS        \n'
+printf '  ======================================\n'
+printf '%s' "$RESET"
+
+section 'BATTERY'
+if command -v upower >/dev/null 2>&1; then
+    battery=$(upower -e | grep -m 1 '/battery_' || true)
+    if [ -n "$battery" ]; then
+        battery_info=$(upower -i "$battery")
+        while IFS='|' read -r label value; do
+            [ -n "$value" ] && row "$label" "$value"
+        done < <(printf '%s\n' "$battery_info" | awk -F: '
+            function clean(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+            /^[[:space:]]*state:/         { print "Status|" clean($2) }
+            /^[[:space:]]*percentage:/    { print "Charge|" clean($2) }
+            /^[[:space:]]*capacity:/      { print "Estimated health|" clean($2) }
+            /^[[:space:]]*cycle-count:/   { print "Charge cycles|" clean($2) }
+            /^[[:space:]]*time to empty:/ { print "Time remaining|" clean($2) }
+            /^[[:space:]]*time to full:/  { print "Time to full|" clean($2) }
+        ')
+    else
+        row 'Status' 'No battery detected'
+    fi
+else
+    row 'Status' 'upower is not installed'
+fi
+
+section 'CHARGE THRESHOLDS'
+battery_dir='/sys/class/power_supply/BAT0'
+start_threshold="$battery_dir/charge_control_start_threshold"
+stop_threshold="$battery_dir/charge_control_end_threshold"
+if [ -r "$start_threshold" ] && [ -r "$stop_threshold" ]; then
+    row 'Start charging' "$(cat "$start_threshold")%"
+    row 'Stop charging' "$(cat "$stop_threshold")%"
+else
+    row 'Status' 'Not available'
+    printf '  Run %ssudo tlp-stat -b%s for more information.\n' "$WHITE" "$RESET"
+fi
+
+section 'TEMPERATURES'
+if command -v sensors >/dev/null 2>&1; then
+    sensor_output=$(sensors 2>/dev/null)
+    if [ -n "$sensor_output" ]; then
+        printf '%s\n' "$sensor_output" | sed 's/^/  /'
+    else
+        row 'Status' 'No sensor data available'
+    fi
+else
+    row 'Status' 'lm-sensors is not installed'
+    printf '  Install it with: %ssudo apt install lm-sensors%s\n' "$WHITE" "$RESET"
+fi
+
+section 'MEMORY'
+while IFS='|' read -r label value; do row "$label" "$value"; done < <(
+    free -h | awk '/^Mem:/ { print "Total|" $2; print "Used|" $3; print "Available|" $7 } /^Swap:/ { print "Swap used|" $3 " of " $2 }'
+)
+section 'LINUX DISK SPACE'
+while IFS='|' read -r label value; do row "$label" "$value"; done < <(
+    df -h / | awk 'NR == 2 { print "Total|" $2; print "Used|" $3 " (" $5 ")"; print "Available|" $4 }'
+)
+section 'UPTIME'
+row 'Running for' "$(uptime -p | sed 's/^up //')"
+printf '\n%s  ======================================%s\n\n' "$GRAY" "$RESET"
